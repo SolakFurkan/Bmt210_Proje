@@ -3,6 +3,20 @@
 #include <string.h>
 #include <time.h>
 
+#define KRITIK_STOK_ESIGI 10
+#define MAX_HEAP_BOYUT 100
+
+typedef struct {                                                                                                        //Öncelikli kuyrukla kritik stok kontrolü yapıları
+    int barkod;
+    char ilacAdi[50];
+    int stokAdedi;
+} HeapDugum;
+
+typedef struct {
+    HeapDugum dugumler[MAX_HEAP_BOYUT];
+    int boyut;
+} MinHeap;
+
 typedef struct Ilac {
     int barkodNo;
     char ilacAdi[50];
@@ -20,10 +34,26 @@ typedef struct Satis {
     struct Satis* alt;
 } Satis;
 
+//Kuyruk sırası için
+typedef struct Hasta {
+    int siraNo;
+    char hastaAdi[50];
+    int barkod;
+    struct Hasta* sonraki;
+} Hasta;
+
+typedef struct {
+    Hasta* on;
+    Hasta* arka;
+    int boyut;
+    int toplamSiraNo;
+} ReceteKuyrugu;
 
 float gunlukCiro = 0.0;
 int toplamSatisAdedi = 0;
 Satis* sonSatislar = NULL;
+ReceteKuyrugu receteKuyrugu = {NULL, NULL, 0, 0};
+MinHeap kritikHeap = {{}, 0};
 
 int sayiAl(const char* mesaj) {
     int sayi;
@@ -180,7 +210,7 @@ void ilacGuncelle(Ilac* kok) {
     } else if (secim == 2) {
         float yeniFiyat;
         printf("Yeni Satis Fiyati : ");
-        while (scanf("%f", &yeniFiyat) != 1) {
+        while (scanf("%f", &yeniFiyat) != 1 || yeniFiyat<=0) {                                                    //Pozitif fiyat kontrolü eklendi
             printf(" Hatali giris.\n Lutfen gecerli bir fiyat giriniz : ");
             while(getchar() != '\n');
         }
@@ -212,6 +242,97 @@ void ilacArama(Ilac* kok, const char* arananAd, int* bulunduMu) {
         }
         ilacArama(kok->sag, arananAd, bulunduMu);
     }
+}
+
+void heapSwap(HeapDugum* a, HeapDugum* b) {                                                                             //Kritik stok fonksiyonları
+    HeapDugum temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+void heapYukariTasi(MinHeap* heap, int i) {
+    while (i > 0) {
+        int ata = (i - 1) / 2;
+        if (heap->dugumler[ata].stokAdedi > heap->dugumler[i].stokAdedi) {
+            heapSwap(&heap->dugumler[ata], &heap->dugumler[i]);
+            i = ata;
+        } else break;
+    }
+}
+
+void heapAsagiTasi(MinHeap* heap, int i) {
+    int en_kucuk = i;
+    int sol = 2 * i + 1;
+    int sag = 2 * i + 2;
+
+    if (sol < heap->boyut &&
+        heap->dugumler[sol].stokAdedi < heap->dugumler[en_kucuk].stokAdedi)
+        en_kucuk = sol;
+
+    if (sag < heap->boyut &&
+        heap->dugumler[sag].stokAdedi < heap->dugumler[en_kucuk].stokAdedi)
+        en_kucuk = sag;
+
+    if (en_kucuk != i) {
+        heapSwap(&heap->dugumler[i], &heap->dugumler[en_kucuk]);
+        heapAsagiTasi(heap, en_kucuk);
+    }
+}
+
+void heapeEkle(MinHeap* heap, int barkod, const char* ad, int stok) {
+    // Aynı barkod zaten heap'teyse güncelle
+    for (int i = 0; i < heap->boyut; i++) {
+        if (heap->dugumler[i].barkod == barkod) {
+            heap->dugumler[i].stokAdedi = stok;
+            heapYukariTasi(heap, i);
+            heapAsagiTasi(heap, i);
+            return;
+        }
+    }
+
+    if (heap->boyut >= MAX_HEAP_BOYUT) return;
+
+    HeapDugum yeni;
+    yeni.barkod = barkod;
+    strcpy(yeni.ilacAdi, ad);
+    yeni.stokAdedi = stok;
+
+    heap->dugumler[heap->boyut] = yeni;
+    heapYukariTasi(heap, heap->boyut);
+    heap->boyut++;
+}
+
+void kritikStoklariGoster(MinHeap* heap) {
+    if (heap->boyut == 0) {
+        printf("\n Kritik stok uyarisi bulunmuyor.\n");
+        return;
+    }
+
+    printf("\n--- KRITIK STOK UYARILARI (En Az Stoklu Once) ---\n");
+    // Heap'i bozmadan sıralı yazdır
+    MinHeap gecici = *heap;
+    int sira = 1;
+
+    while (gecici.boyut > 0) {
+        HeapDugum en_az = gecici.dugumler[0];
+        printf("%d. %-18s | Barkod: %-6d | Stok: %d adet\n",
+               sira++, en_az.ilacAdi, en_az.barkod, en_az.stokAdedi);
+
+        gecici.dugumler[0] = gecici.dugumler[gecici.boyut - 1];
+        gecici.boyut--;
+        heapAsagiTasi(&gecici, 0);
+    }
+}
+
+// Tüm envanteri tarayıp kritik olanları heap'e yükler
+void kritikStokTara(Ilac* kok, MinHeap* heap) {
+    if (kok == NULL) return;
+    kritikStokTara(kok->sol, heap);
+
+    if (kok->stokAdedi < KRITIK_STOK_ESIGI)
+        heapeEkle(heap, kok->barkodNo, kok->ilacAdi, kok->stokAdedi);
+
+    kritikStokTara(kok->sag, heap);
 }
 
 void ilacSat(Ilac* kok, int barkod) {
@@ -259,6 +380,14 @@ void ilacSat(Ilac* kok, int barkod) {
 
     printf("\n  SATIS BASARILI: %s | %d adet | Tutar: %.2f TL\n",satilacak->ilacAdi, adet, toplamTutar);
 
+    // Stok kritik eşiğin altına düştüyse heap'e ekle
+    if (satilacak->stokAdedi < KRITIK_STOK_ESIGI) {
+        heapeEkle(&kritikHeap, satilacak->barkodNo,
+                   satilacak->ilacAdi, satilacak->stokAdedi);
+        printf(" UYARI: %s icin stok kritik seviyede! (%d adet kaldi)\n",
+               satilacak->ilacAdi, satilacak->stokAdedi);
+    }
+
     Satis* yeniSatis = (Satis*)malloc(sizeof(Satis));
     yeniSatis->barkodNo = satilacak->barkodNo;
     strcpy(yeniSatis->ilacAdi, satilacak->ilacAdi);
@@ -267,7 +396,7 @@ void ilacSat(Ilac* kok, int barkod) {
     sonSatislar = yeniSatis;
 }
 
-void satisiIptalEt(Ilac* kok) {
+void satisiIptalEt(Ilac* kok,MinHeap* heap) {
     if (sonSatislar == NULL) {
         printf("\nIptal edilecek bir islem yok.\n");
         return;
@@ -286,7 +415,69 @@ void satisiIptalEt(Ilac* kok) {
 
         printf("\n   Iade Tamamlandı: %s | %d adet geri alindi.\n",iptal->ilacAdi, iptal->adet);
     }
+
+    // Stok eşiğin üstüne çıktıysa heap'i güncelle
+    if (iadeIlac->stokAdedi >= KRITIK_STOK_ESIGI) {
+        // Heap'ten çıkar — yeniden tara
+        kritikHeap.boyut = 0;
+        kritikStokTara(kok, heap);
+    }
     free(iptal);
+}
+
+void kuyruğaEkle(ReceteKuyrugu* kuyruk, const char* hastaAdi, int barkod) {                                             //Hasta kuyruğu için
+    Hasta* yeni = (Hasta*)malloc(sizeof(Hasta));
+    kuyruk->toplamSiraNo++;
+    yeni->siraNo = kuyruk->toplamSiraNo;
+    strcpy(yeni->hastaAdi, hastaAdi);
+    yeni->barkod = barkod;
+    yeni->sonraki = NULL;
+
+    if (kuyruk->arka == NULL) {
+        kuyruk->on = yeni;
+        kuyruk->arka = yeni;
+    } else {
+        kuyruk->arka->sonraki = yeni;
+        kuyruk->arka = yeni;
+    }
+    kuyruk->boyut++;
+    printf("\n Hasta kuyroguna alindi. Sira No: %d | Hasta: %s\n",
+           yeni->siraNo, yeni->hastaAdi);
+}
+
+void kuyruktenCikar(ReceteKuyrugu* kuyruk, Ilac* root) {
+    if (kuyruk->on == NULL) {
+        printf("\n Kuyrukta bekleyen hasta yok.\n");
+        return;
+    }
+
+    Hasta* islenen = kuyruk->on;
+    kuyruk->on = kuyruk->on->sonraki;
+    if (kuyruk->on == NULL)
+        kuyruk->arka = NULL;
+    kuyruk->boyut--;
+
+    printf("\n Islenen hasta: %s | Barkod: %d\n",
+           islenen->hastaAdi, islenen->barkod);
+
+    ilacSat(root, islenen->barkod);
+    free(islenen);
+}
+
+void kuyruguListele(ReceteKuyrugu* kuyruk) {
+    if (kuyruk->on == NULL) {
+        printf("\n Kuyruk bos.\n");
+        return;
+    }
+    printf("\n--- Recete Bekleme Sirasi --\n");
+    Hasta* gecici = kuyruk->on;
+    int sira = 1;
+    while (gecici != NULL) {
+        printf("%d. Sira | Hasta: %-15s | Barkod: %d\n",
+               sira++, gecici->hastaAdi, gecici->barkod);
+        gecici = gecici->sonraki;
+    }
+    printf("Toplam Bekleyen: %d hasta\n", kuyruk->boyut);
 }
 
 void gunSonuRaporu(Ilac* kok) {
@@ -406,6 +597,10 @@ int main() {
         printf("8. Sistem Performans Testi\n");
         printf("9. Gun Sonu Raporu\n");
         printf("10. Cikis\n");
+        printf("11. Recete Kuyroguna Hasta Ekle\n");
+        printf("12. Kuyruktan Hasta Isle\n");
+        printf("13. Bekleme Sirasini Listele\n");
+        printf("14. Kritik Stok Uyarilari\n");
         printf("Seciminiz: ");
 
         if (scanf("%d", &secim) != 1) {
@@ -421,11 +616,11 @@ int main() {
                     printf(" Bu barkod zaten kayitli.\n");
                 } else {
                     printf("Ilac Adi: ");
-                    scanf(" %[^\n]", ad);
+                    scanf(" %49[^\n]", ad);                                                                       //Çok karakterli ad girildiğinde programın çökmemesi için sınır
 
                     stok = sayiAl("Stok: ");
                     printf("Fiyat: ");
-                    while (scanf("%f", &fiyat) != 1) {
+                    while (scanf("%f", &fiyat) != 1 || fiyat<=0) {                                                //Pozitif fiyat kontrolüeklendi
                         printf("Hatali giris! Lutfen gecerli bir fiyat giriniz: ");
                         while(getchar() != '\n');
                     }
@@ -455,7 +650,7 @@ int main() {
                 char arananIsim[50];
                 int bulunduMu = 0;
                 printf("Aradiginiz ilacin ismini veya bir kismini girin: ");
-                scanf(" %[^\n]", arananIsim);
+                scanf(" %49[^\n]", arananIsim);                                                                   //Ayrılan bellek alanını aşmaması için sınır
 
                 printf("\n '%s' Icin Arama Sonuclari :\n", arananIsim);
                 ilacArama(root, arananIsim, &bulunduMu);
@@ -470,7 +665,7 @@ int main() {
                 ilacSat(root, barkod);
                 break;
             case 6:
-                satisiIptalEt(root);
+                satisiIptalEt(root, &kritikHeap);
                 break;
             case 7:
                 printf("\n--- Mevcut Envanter Listesi ---\n");
@@ -490,12 +685,35 @@ int main() {
                     fclose(dosya);
                 }
                 break;
+            case 11: {
+                char hastaAdi[50];
+                printf("Hasta Adi: ");
+                scanf(" %49[^\n]", hastaAdi);
+                barkod = sayiAl("Ilac Barkodu: ");
+                kuyruğaEkle(&receteKuyrugu, hastaAdi, barkod);
+                break;
+            }
+            case 12:
+                kuyruktenCikar(&receteKuyrugu, root);
+                break;
+            case 13:
+                kuyruguListele(&receteKuyrugu);
+                break;
+            case 14:
+                kritikStokTara(root, &kritikHeap);  // güncel tarama yap
+                kritikStoklariGoster(&kritikHeap);
+                break;
             default:
                 printf("Gecersiz secim.\n");
         }
     } while (secim != 10);
 
     agaciTemizle(root);
+    while (receteKuyrugu.on != NULL) {
+        Hasta* silinecek = receteKuyrugu.on;
+        receteKuyrugu.on = receteKuyrugu.on->sonraki;
+        free(silinecek);
+    }
 
     while (sonSatislar != NULL) {
         Satis* silinecek = sonSatislar;
